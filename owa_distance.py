@@ -78,7 +78,8 @@ def d_OWA(m1, m2, R_o):
         R_o: 关系矩阵
     """
     diff = m1 - m2
-    M = np.eye(len(R_o)) - R_o  # (I - R_o)
+    # M = np.eye(len(R_o)) - R_o  # (I - R_o)
+    M = 1 - R_o  # (I - R_o)
     distance = np.sqrt(0.5 * diff.T @ M @ diff)
     return distance
 
