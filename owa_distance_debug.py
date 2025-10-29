@@ -1,14 +1,18 @@
 import matplotlib.pyplot as plt
 from collections.abc import Iterable
 import copy
-from sklearn.model_selection import RepeatedKFold
-from typing import Dict, List, Tuple, Union
-from sklearn.datasets import load_iris, load_wine
-from sklearn.preprocessing import StandardScaler
-from scipy.stats import norm
 import itertools
 from string import ascii_uppercase
 import numpy as np
+from sklearn.model_selection import RepeatedKFold
+from sklearn.datasets import load_iris, load_wine, load_breast_cancer, load_digits
+from typing import Dict, List, Tuple, Any,Union
+from sklearn.preprocessing import StandardScaler
+from scipy.stats import norm
+import pickle
+import os
+from ucimlrepo import fetch_ucirepo
+import pandas as pd
 
 plt.rcParams.update({
     "figure.dpi": 300,
@@ -335,6 +339,8 @@ def geometric_mean_correction_with_stats2(Crd, rps_weights_norm, eps=1e-12):
     # 标准化偏差 z（可正可负）
     # z = (Crd - mu) / sigma
     Delta_Cred_var = mu - Crd * (sigma / (mu + 1e-10))
+    # print("Delta_Cred_var",Delta_Cred_var)
+    k = 1.0 + (sigma / (mu + eps))
     # 自适应系数 k：随分散度增加而增强调整力（无硬超参）
     k = 1 + (sigma / (mu + eps))
 
@@ -342,6 +348,7 @@ def geometric_mean_correction_with_stats2(Crd, rps_weights_norm, eps=1e-12):
 
     # 逐元素修正因子（z 越小 -> 因子越小）
     factor = np.exp(-Delta_Cred_var)
+    # print("factor", factor)
     # factor = np.power(rps,Delta_Cred_var)
 
     # 基础几何项（你之前用 abs 的版本效果不错）
@@ -1217,12 +1224,12 @@ def main_function(evidence, hypotheses_all, hypotheses = {'A', 'B', 'C','D'}):
     N = len(evidence)
     for _ in range(N - 1):
         ros_result = zhou_combination(ros_result, fused_probabilities)
-    # print("Optimal ros:", ros_result)
+    # print("Optimal ros:", convert_numpy_types(ros_result))
     # print("Optimal los:", los_result)
 
     fused_end = calculate_OPT(ros_result, hypotheses)
     # print("Fused end:", convert_numpy_types(fused_end))
-    # pic_uniform = calculate_pic(fused_end)
+    pic_uniform = calculate_pic(fused_end)
     # print(f"均匀分布: PIC = {pic_uniform:.6f}")
     return fused_end
 
@@ -1382,7 +1389,19 @@ def gen_rps_fun_for_sample(X_train, y_train, test_sample):
     return RPS_w
 
 # 定义映射关系
-index_to_label = {0: 'A', 1: 'B', 2: 'C'}
+# index_to_label = {0: 'S', 1: 'E', 2: 'V'}
+index_to_label= {
+0: "A",
+1: "B",
+2: "C",
+3: "D",
+4: "E",
+5: "F",
+6: "G",
+7: "H",
+8: "I",
+9: "J"
+}
 
 # 转换函数
 def convert_to_labeled_rps(gen_rps):
@@ -1489,95 +1508,362 @@ def cross_validation_with_rps(n_splits=5, n_repeats=100):
         'repeat_std': np.std(repeat_means)
     }
 
-# 执行100次五折交叉验证
-results = cross_validation_with_rps(n_splits=5, n_repeats=100)
+def load_heart_dataset():
+    """
+    加载Heart疾病数据集
+    使用UCI机器学习仓库的API获取数据
+    """
+    heart_disease = fetch_ucirepo(id=45)
+    X = heart_disease.data.features
+    y = heart_disease.data.targets
 
+    # 处理目标变量：将>0的值视为有疾病(1)，0为无疾病(0)
+    y = (y > 0).astype(int).values.ravel()
 
-# if __name__ == '__main__':
-#     evidenceList = []
-#     evidence5 = [
-#         {  # 传感器1
-#             ('A',): 0.31,
-#             ('B',): 0.0,
-#             ('C',): 0.29,
-#             ('A', 'C',): 0.0,
-#             ('C', 'A',): 0.0,
-#             ('A', 'B', 'C'): 0.0167,
-#             ('A', 'C', 'B'): 0.0167,
-#             ('B', 'A', 'C'): 0.0167,
-#             ('B', 'C', 'A'): 0.0167,
-#             ('C', 'A', 'B'): 0.3167,
-#             ('C', 'B', 'A'): 0.0167
-#         },
-#         {  # 传感器2
-#             ('A',): 0.0,
-#             ('B',): 0.8,
-#             ('C',): 0.2,
-#             ('A', 'C',): 0.0,
-#             ('C', 'A',): 0.0,
-#             ('A', 'B', 'C'): 0.0,
-#             ('A', 'C', 'B'): 0.0,
-#             ('B', 'A', 'C'): 0.0,
-#             ('B', 'C', 'A'): 0.0,
-#             ('C', 'A', 'B'): 0.0,
-#             ('C', 'B', 'A'): 0.0
-#         },
-#         {  # 传感器3
-#             ('A',): 0.27,
-#             ('B',): 0.07,
-#             ('C',): 0.21,
-#             ('A', 'C',): 0.0,
-#             ('C', 'A',): 0.0,
-#             ('A', 'B', 'C'): 0.025,
-#             ('A', 'C', 'B'): 0.025,
-#             ('B', 'A', 'C'): 0.025,
-#             ('B', 'C', 'A'): 0.025,
-#             ('C', 'A', 'B'): 0.325,
-#             ('C', 'B', 'A'): 0.025
-#         },
-#         {  # 传感器4
-#             ('A',): 0.25,
-#             ('B',): 0.05,
-#             ('C',): 0.3,
-#             ('A', 'C',): 0.09,
-#             ('C', 'A',): 0.31,
-#             ('A', 'B', 'C'): 0.0,
-#             ('A', 'C', 'B'): 0.0,
-#             ('B', 'A', 'C'): 0.0,
-#             ('B', 'C', 'A'): 0.0,
-#             ('C', 'A', 'B'): 0.0,
-#             ('C', 'B', 'A'): 0.0
-#         },
-#         {  # 专家
-#             ('A',): 0.25,
-#             ('B',): 0.0,
-#             ('C',): 0.2,
-#             ('A', 'C'): 0.36,
-#             ('C', 'A'): 0.0,
-#             ('A', 'B', 'C'): 0.0233,
-#             ('A', 'C', 'B'): 0.0733,
-#             ('B', 'A', 'C'): 0.0233,
-#             ('B', 'C', 'A'): 0.0233,
-#             ('C', 'A', 'B'): 0.0233,
-#             ('C', 'B', 'A'): 0.0233
-#         }
-#     ]
-#     labeled_evidence1 = [{('B', 'C'): 0.03327384787501296, ('A',): 0.9019616778270755, ('A', 'C'): 0.39866767795888225,
-#                           ('A', 'B'): 0.3718147939721801, ('B',): 0.08115425823940943, ('C',): 0.016884063933515225,
-#                           ('A', 'B', 'C'): 0.1534570958354748},
-#                          {('C', 'B', 'A'): 0.10182584737432683, ('B', 'A'): 0.16947693526879107,
-#                           ('C', 'B'): 0.2455900301874588, ('C', 'A'): 0.2325030640067866, ('A',): 0.1918774432426149,
-#                           ('B',): 0.35284268983452355, ('C',): 0.4552798669228617},
-#                          {('A', 'B'): 0.41598591681815067, ('A', 'C'): 0.45577200539511675,
-#                           ('A', 'B', 'C'): 0.17332676532019237, ('B',): 1.058743745570101e-08,
-#                           ('C',): 9.43747425561326e-14, ('A',): 0.9999999894124683, ('B', 'C'): 3.5757071139477724e-09},
-#                          {('B',): 2.7875087890433815e-08, ('A', 'C'): 0.4561745969379547,
-#                           ('A', 'B', 'C'): 0.17796638594216732, ('A', 'B'): 0.40403893256141427,
-#                           ('A',): 0.9999999716680565, ('B', 'C'): 1.008610274197881e-08,
-#                           ('C',): 4.5685557258858824e-10}]
-#     evidenceList.append(evidence5)
-#     hypotheses = {'A', 'B', 'C', 'D'}
-#     for evidence in evidenceList:
-#         hypotheses_all = extract_hypotheses(evidence)
-#         result = main_function(evidence, hypotheses_all, hypotheses)
-#         print(result)
+    # 处理缺失值（如果有）
+    if isinstance(X, pd.DataFrame):
+        X = X.fillna(X.mean()).values
+
+    return {'data': X, 'target': y}
+def calculate_final_statistics(all_accuracies: List[float], n_splits: int, n_repeats: int) -> Dict[str, Any]:
+    """计算最终的统计结果"""
+    accuracies = np.array(all_accuracies)
+    repeat_accuracies = accuracies.reshape(n_repeats, n_splits).mean(axis=1)
+
+    return {
+        'mean_accuracy': np.mean(accuracies),
+        'std_accuracy': np.std(accuracies),
+        'mean_repeat_accuracy': np.mean(repeat_accuracies),
+        'std_repeat_accuracy': np.std(repeat_accuracies),
+        'min_accuracy': np.min(accuracies),
+        'max_accuracy': np.max(accuracies),
+        'median_accuracy': np.median(accuracies),
+        'repeat_accuracies': repeat_accuracies.tolist(),
+        'all_accuracies': all_accuracies
+    }
+
+def load_sonar_dataset():
+    """加载Sonar数据集"""
+    sonar = fetch_ucirepo(id=151)
+    X = sonar.data.features
+    y = sonar.data.targets
+
+    # 将目标变量转换为数值：Rock=0, Mine=1
+    y = (y == 'M').astype(int).values.ravel()
+
+    return {'data': X.values, 'target': y}
+def generalized_cross_validation_with_rps(
+        dataset_name: str = 'iris',
+        n_splits: int = 5,
+        n_repeats: int = 100,
+        results_dir: str = 'cv_results\owa_distance_debug',
+        save_final: bool = True
+) -> Dict[str, Any]:
+    """
+    通用的五折交叉验证函数，支持多种数据集
+
+    参数:
+        dataset_name: 数据集名称 ('iris', 'wine', 'breast_cancer', 'digits', 'heart')
+        n_splits: 折数 (默认为5)
+        n_repeats: 重复次数 (默认为100)
+        results_dir: 结果保存目录
+        save_final: 是否保存最终结果
+
+    返回:
+        包含完整结果的字典
+    """
+    # 1. 加载数据集
+    global elements
+    global class_mapping
+    data_loader = {
+        'iris': load_iris,
+        'wine': load_wine,
+        'breast_cancer': load_breast_cancer,
+        'digits': load_digits,
+        'heart': load_heart_dataset,
+        'sonar': load_sonar_dataset  # 新增Sonar数据集
+    }
+
+    if dataset_name not in data_loader:
+        raise ValueError(f"不支持的数据集: {dataset_name}. 可选: {list(data_loader.keys())}")
+
+    dataset = data_loader[dataset_name]()
+    X = dataset['data']
+    y = dataset['target']
+
+    # 2. 根据数据集设置类别标签
+    # 2. 根据数据集设置类别标签和映射关系
+    if dataset_name == 'iris':
+        # 3类: A, B, C
+        class_labels = ['setosa', 'versicolor', 'virginica']
+        elements = ['A', 'B', 'C']
+        class_mapping = {'A': 0, 'B': 1, 'C': 2}
+        original_to_letter = {0: 'A', 1: 'B', 2: 'C'}
+    elif dataset_name == 'wine':
+        # 3类: A, B, C
+        class_labels = ['Class_1', 'Class_2', 'Class_3']
+        elements = ['A', 'B', 'C']
+        class_mapping = {'A': 0, 'B': 1, 'C': 2}
+        original_to_letter = {0: 'A', 1: 'B', 2: 'C'}
+    elif dataset_name == 'breast_cancer':
+        # 2类: A, B
+        class_labels = ['Benign', 'Malignant']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+        original_to_letter = {0: 'A', 1: 'B'}
+    elif dataset_name == 'digits':
+        # 10类: A-J
+        class_labels = [str(i) for i in range(10)]
+        elements = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+        class_mapping = {letter: i for i, letter in enumerate(elements)}
+        original_to_letter = {i: letter for i, letter in enumerate(elements)}
+    elif dataset_name == 'heart':
+        # 2类: A, B
+        class_labels = ['No_Disease', 'Disease']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+        original_to_letter = {0: 'A', 1: 'B'}
+    elif dataset_name == 'sonar':
+        # 2类: A, B
+        class_labels = ['Rock', 'Mine']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+
+    # 3. 创建结果目录
+    os.makedirs(results_dir, exist_ok=True)
+
+    # 4. 初始化交叉验证
+    rkf = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=42)
+
+    file_results = {
+        'dataset': dataset_name,
+        'mean_accuracy': 0.0,  # 存储每次重复的统计摘要
+        'std_accuracy':0.0
+    }
+
+    # 5. 存储所有结果
+    all_results = {
+        'dataset': dataset_name,
+        'n_splits': n_splits,
+        'n_repeats': n_repeats,
+        'class_labels': class_labels,
+        'class_mapping': class_mapping,
+        'fold_results': [],  # 存储每一折的详细结果
+        'repeat_summaries': [],  # 存储每次重复的统计摘要
+        'all_accuracies': []  # 存储所有准确率
+    }
+
+    repeat_count = 1
+    current_repeat_results = []
+
+    for train_index, test_index in rkf.split(X):
+        fold_result = {
+            'repeat': (repeat_count - 1) // n_splits + 1,
+            'fold': ((repeat_count - 1) % n_splits) + 1,
+            'train_indices': train_index.tolist(),
+            'test_indices': test_index.tolist(),
+            'sample_results': [],
+            'accuracy': 0.0
+        }
+
+        # 划分训练测试集
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        # 数据标准化
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        correct_predictions = 0
+        total_predictions = 0
+
+        for test_idx in range(len(X_test_scaled)):
+            # sample_result = {
+            #     'true_label': int(y_test[test_idx]),
+            #     'predicted_label': None,
+            #     'prob_dist': None,
+            #     'evidence': None,
+            #     'correct': False
+            # }
+
+            try:
+                # 1. 生成测试样本的RPS
+                gen_rps = gen_rps_fun_for_sample(X_train_scaled, y_train, X_test_scaled[test_idx])
+
+                # 2. 将RPS转换为标准格式
+                convert_numpy_types(gen_rps)
+                labeled_evidence = convert_to_labeled_rps(gen_rps)
+
+                # 3. 执行分类
+                hypotheses_all = extract_hypotheses(labeled_evidence)
+                # print("evidence",evidence)
+                fused_result = main_function(labeled_evidence, hypotheses_all, elements)
+                # 预测标签 = 概率最大的类
+                pred = max(fused_result, key=fused_result.get)
+                predicted_label = class_mapping.get(pred, 0)
+                true_label = y_test[test_idx]
+
+                # 5. 记录结果
+                # sample_result.update({
+                #     'predicted_label': int(predicted_label),
+                #     'prob_dist': prob_dist,
+                #     'evidence': labeled_evidence,
+                #     'correct': predicted_label == true_label
+                # })
+
+                if predicted_label == true_label:
+                    correct_predictions += 1
+                total_predictions += 1
+
+            except Exception as e:
+                print(f"处理样本 {test_idx} 时出错: {e}")
+                # sample_result['error'] = str(e)
+
+            # fold_result['sample_results'].append(sample_result)
+
+        # 计算当前折的准确率
+        if total_predictions > 0:
+            acc = correct_predictions / total_predictions
+            fold_result['accuracy'] = acc
+            all_results['all_accuracies'].append(acc)
+        else:
+            fold_result['accuracy'] = 0.0
+            all_results['all_accuracies'].append(0.0)
+
+        current_repeat_results.append(fold_result)
+        all_results['fold_results'].append(fold_result)
+
+        print(f"Repeat {(repeat_count - 1) // n_splits + 1}, Fold {((repeat_count - 1) % n_splits) + 1}: "
+              f"Accuracy = {fold_result['accuracy']:.4f}")
+
+        # 每完成一次完整的5折交叉验证，生成统计摘要但不保存文件
+        if repeat_count % n_splits == 0:
+            current_repeat = repeat_count // n_splits
+            current_accuracies = [r['accuracy'] for r in current_repeat_results[-n_splits:]]
+            mean_acc = np.mean(current_accuracies)
+
+            repeat_summary = {
+                'repeat': current_repeat,
+                # 'fold_accuracies': current_accuracies,
+                'mean_accuracy': mean_acc,
+                # 'std_accuracy': np.std(current_accuracies),
+                # 'min_accuracy': min(current_accuracies),
+                # 'max_accuracy': max(current_accuracies)
+            }
+
+            # file_results['repeat_summaries'].append(repeat_summary)
+
+            print(f"\n=== Repeat {current_repeat} 完成 ===")
+            print(f"平均准确率: {mean_acc:.4f} ± {np.std(current_accuracies):.4f}")
+            print(f"各折准确率: {[f'{acc:.4f}' for acc in current_accuracies]}")
+            print(f"最小准确率: {min(current_accuracies):.4f}")
+            print(f"最大准确率: {max(current_accuracies):.4f}\n")
+
+            # 重置当前重复结果（仅清空临时列表）
+            current_repeat_results = []
+
+        repeat_count += 1
+
+    # 计算最终统计结果
+    final_stats = calculate_final_statistics(all_results['all_accuracies'], n_splits, n_repeats)
+    all_results.update(final_stats)
+    file_results['mean_accuracy']=final_stats['mean_accuracy']
+    file_results['std_accuracy']=final_stats['std_accuracy']
+
+    # 保存完整结果
+    if save_final:
+        final_path = os.path.join(results_dir, f"{dataset_name}_final_results.pkl")
+        with open(final_path, 'wb') as f:
+            pickle.dump(file_results, f)
+        print(f"\n完整结果已保存到: {final_path}")
+
+    return all_results
+
+if __name__ == '__main__':
+    # evidenceList = []
+    # evidence5 = [
+    #     {  # 传感器1
+    #         ('A',): 0.31,
+    #         ('B',): 0.0,
+    #         ('C',): 0.29,
+    #         ('A', 'C',): 0.0,
+    #         ('C', 'A',): 0.0,
+    #         ('A', 'B', 'C'): 0.0167,
+    #         ('A', 'C', 'B'): 0.0167,
+    #         ('B', 'A', 'C'): 0.0167,
+    #         ('B', 'C', 'A'): 0.0167,
+    #         ('C', 'A', 'B'): 0.3167,
+    #         ('C', 'B', 'A'): 0.0167
+    #     },
+    #     {  # 传感器2
+    #         ('A',): 0.0,
+    #         ('B',): 0.8,
+    #         ('C',): 0.2,
+    #         ('A', 'C',): 0.0,
+    #         ('C', 'A',): 0.0,
+    #         ('A', 'B', 'C'): 0.0,
+    #         ('A', 'C', 'B'): 0.0,
+    #         ('B', 'A', 'C'): 0.0,
+    #         ('B', 'C', 'A'): 0.0,
+    #         ('C', 'A', 'B'): 0.0,
+    #         ('C', 'B', 'A'): 0.0
+    #     },
+    #     {  # 传感器3
+    #         ('A',): 0.27,
+    #         ('B',): 0.07,
+    #         ('C',): 0.21,
+    #         ('A', 'C',): 0.0,
+    #         ('C', 'A',): 0.0,
+    #         ('A', 'B', 'C'): 0.025,
+    #         ('A', 'C', 'B'): 0.025,
+    #         ('B', 'A', 'C'): 0.025,
+    #         ('B', 'C', 'A'): 0.025,
+    #         ('C', 'A', 'B'): 0.325,
+    #         ('C', 'B', 'A'): 0.025
+    #     },
+    #     {  # 传感器4
+    #         ('A',): 0.25,
+    #         ('B',): 0.05,
+    #         ('C',): 0.3,
+    #         ('A', 'C',): 0.09,
+    #         ('C', 'A',): 0.31,
+    #         ('A', 'B', 'C'): 0.0,
+    #         ('A', 'C', 'B'): 0.0,
+    #         ('B', 'A', 'C'): 0.0,
+    #         ('B', 'C', 'A'): 0.0,
+    #         ('C', 'A', 'B'): 0.0,
+    #         ('C', 'B', 'A'): 0.0
+    #     },
+    #     {  # 专家
+    #         ('A',): 0.25,
+    #         ('B',): 0.0,
+    #         ('C',): 0.2,
+    #         ('A', 'C'): 0.36,
+    #         ('C', 'A'): 0.0,
+    #         ('A', 'B', 'C'): 0.0233,
+    #         ('A', 'C', 'B'): 0.0733,
+    #         ('B', 'A', 'C'): 0.0233,
+    #         ('B', 'C', 'A'): 0.0233,
+    #         ('C', 'A', 'B'): 0.0233,
+    #         ('C', 'B', 'A'): 0.0233
+    #     }
+    # ]
+    # evidenceList.append(evidence5)
+    # hypotheses = {'A', 'B', 'C', 'D'}
+    # for evidence in evidenceList:
+    #     hypotheses_all = extract_hypotheses(evidence)
+    #     result = main_function(evidence, hypotheses_all, hypotheses)
+    #     print(result)
+    # 执行100次五折交叉验证
+    # breast_cancer数据集最终结果:
+    # 平均准确率: 0.9349 ± 0.0236
+    # Iris数据集最终结果:
+    # 平均准确率: 0.8253 ± 0.0444
+    # sonar数据集最终结果:
+    # 平均准确率: 0.6745 ± 0.0703
+    databases = ['sonar']
+    for database in databases:
+        iris_results = generalized_cross_validation_with_rps(database)
+        print("\nIris数据集最终结果:")
+        print(f"平均准确率: {iris_results['mean_accuracy']:.4f} ± {iris_results['std_accuracy']:.4f}")

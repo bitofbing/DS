@@ -152,44 +152,88 @@ def rps_entropy(rps_dict):
 
     return entropy
 
-def weighted_subset_rps(rps_dict_list, credibilities, n_min=2):
-    """计算加权子集RPS (Definition 4.4) - 修改为使用字典列表"""
-    all_perms = set()
-    for rps_dict in rps_dict_list:
-        all_perms.update(rps_dict.keys())
-    all_perms = sorted(all_perms, key=lambda x: (len(x), x))
+# def weighted_subset_rps(rps_dict_list, credibilities, n_min=2):
+#     """计算加权子集RPS (Definition 4.4) - 修改为使用字典列表"""
+#     all_perms = set()
+#     for rps_dict in rps_dict_list:
+#         all_perms.update(rps_dict.keys())
+#     all_perms = sorted(all_perms, key=lambda x: (len(x), x))
+#
+#     # 生成所有可能的子集组合（大小≥n_min）
+#     n_rps = len(rps_dict_list)
+#     weighted_rps_results = {}
+#
+#     for subset_size in range(n_min, n_rps + 1):
+#         for subset_indices in itertools.combinations(range(n_rps), subset_size):
+#             # 计算加权质量函数
+#             weighted_mass = defaultdict(float)
+#             total_cred = 0
+#
+#             for idx in subset_indices:
+#                 cred = credibilities[idx]
+#                 total_cred += cred
+#                 for perm, mass in rps_dict_list[idx].items():
+#                     weighted_mass[perm] += cred * mass
+#
+#             # 归一化
+#             if total_cred > 0:
+#                 for perm in weighted_mass:
+#                     weighted_mass[perm] /= total_cred
+#
+#             # 转换为标准格式
+#             result_dict = {}
+#             for perm in all_perms:
+#                 result_dict[perm] = weighted_mass.get(perm, 0.0)
+#
+#             subset_key = f"WS{subset_size}_{len(weighted_rps_results) + 1}"
+#             weighted_rps_results[subset_key] = result_dict
+#
+#     return weighted_rps_results
+def weighted_subset_rps_optimized(rps_dict_list, credibilities, n_min=2, subset_size=None):
+    """优化版本：根据Definition 4.4计算加权子集RPS
 
-    # 生成所有可能的子集组合（大小≥n_min）
+    参数:
+        subset_size: 指定子集大小（None=使用n_min，避免组合爆炸）
+    """
+    # 预计算所有排列
+    all_perms = sorted(set().union(*[r.keys() for r in rps_dict_list]),
+                       key=lambda x: (len(x), x))
+
     n_rps = len(rps_dict_list)
     weighted_rps_results = {}
 
-    for subset_size in range(n_min, n_rps + 1):
-        for subset_indices in itertools.combinations(range(n_rps), subset_size):
+    # 关键优化：只计算特定大小的子集，避免组合爆炸
+    if subset_size is None:
+        subset_size = n_min  # 默认使用最小子集大小
+
+    # 只计算指定大小的子集（而不是所有大小）
+    valid_sizes = [subset_size] if subset_size >= n_min else [n_min]
+
+    counter = 1
+    for size in valid_sizes:
+        # 限制最大子集数量，防止组合爆炸
+        max_combinations = min(100, math.comb(n_rps, size))  # 安全限制
+
+        for i, subset_indices in enumerate(itertools.combinations(range(n_rps), size)):
+            if i >= max_combinations:  # 防止组合爆炸
+                break
+
             # 计算加权质量函数
             weighted_mass = defaultdict(float)
-            total_cred = 0
+            total_cred = sum(credibilities[idx] for idx in subset_indices)
 
-            for idx in subset_indices:
-                cred = credibilities[idx]
-                total_cred += cred
-                for perm, mass in rps_dict_list[idx].items():
-                    weighted_mass[perm] += cred * mass
-
-            # 归一化
             if total_cred > 0:
-                for perm in weighted_mass:
-                    weighted_mass[perm] /= total_cred
+                for idx in subset_indices:
+                    cred = credibilities[idx]
+                    for perm, mass in rps_dict_list[idx].items():
+                        weighted_mass[perm] += cred * mass / total_cred
 
             # 转换为标准格式
-            result_dict = {}
-            for perm in all_perms:
-                result_dict[perm] = weighted_mass.get(perm, 0.0)
-
-            subset_key = f"WS{subset_size}_{len(weighted_rps_results) + 1}"
-            weighted_rps_results[subset_key] = result_dict
+            result_dict = {perm: weighted_mass.get(perm, 0.0) for perm in all_perms}
+            weighted_rps_results[f"WS{size}_{counter}"] = result_dict
+            counter += 1
 
     return weighted_rps_results
-
 def process_example(example_data):
     """处理示例数据 - 修改为使用字典列表"""
     # 步骤1: 构建相似度矩阵
@@ -213,7 +257,7 @@ def process_example(example_data):
     print()
 
     # 步骤4: 计算加权子集RPS
-    weighted_rps = weighted_subset_rps(example_data, credibility, n_min=2)
+    weighted_rps = weighted_subset_rps_optimized(example_data, credibility, n_min=2)
     print("加权子集RPS数量:", len(weighted_rps))
     print()
 
@@ -416,10 +460,78 @@ evidence_rps = [
         ('A', 'B', 'C'): 0.12
     }
 ]
+evidenceList = []
+evidence5 = [
+    {  # 传感器1
+        ('A',): 0.31,
+        ('B',): 0.0,
+        ('C',): 0.29,
+        ('A', 'C',): 0.0,
+        ('C', 'A',): 0.0,
+        ('A', 'B', 'C'): 0.0167,
+        ('A', 'C', 'B'): 0.0167,
+        ('B', 'A', 'C'): 0.0167,
+        ('B', 'C', 'A'): 0.0167,
+        ('C', 'A', 'B'): 0.3167,
+        ('C', 'B', 'A'): 0.0167
+    },
+    {  # 传感器2
+        ('A',): 0.0,
+        ('B',): 0.8,
+        ('C',): 0.2,
+        ('A', 'C',): 0.0,
+        ('C', 'A',): 0.0,
+        ('A', 'B', 'C'): 0.0,
+        ('A', 'C', 'B'): 0.0,
+        ('B', 'A', 'C'): 0.0,
+        ('B', 'C', 'A'): 0.0,
+        ('C', 'A', 'B'): 0.0,
+        ('C', 'B', 'A'): 0.0
+    },
+    {  # 传感器3
+        ('A',): 0.27,
+        ('B',): 0.07,
+        ('C',): 0.21,
+        ('A', 'C',): 0.0,
+        ('C', 'A',): 0.0,
+        ('A', 'B', 'C'): 0.025,
+        ('A', 'C', 'B'): 0.025,
+        ('B', 'A', 'C'): 0.025,
+        ('B', 'C', 'A'): 0.025,
+        ('C', 'A', 'B'): 0.325,
+        ('C', 'B', 'A'): 0.025
+    },
+    {  # 传感器4
+        ('A',): 0.25,
+        ('B',): 0.05,
+        ('C',): 0.3,
+        ('A', 'C',): 0.09,
+        ('C', 'A',): 0.31,
+        ('A', 'B', 'C'): 0.0,
+        ('A', 'C', 'B'): 0.0,
+        ('B', 'A', 'C'): 0.0,
+        ('B', 'C', 'A'): 0.0,
+        ('C', 'A', 'B'): 0.0,
+        ('C', 'B', 'A'): 0.0
+    },
+    {  # 专家
+        ('A',): 0.25,
+        ('B',): 0.0,
+        ('C',): 0.2,
+        ('A', 'C'): 0.36,
+        ('C', 'A'): 0.0,
+        ('A', 'B', 'C'): 0.0233,
+        ('A', 'C', 'B'): 0.0733,
+        ('B', 'A', 'C'): 0.0233,
+        ('B', 'C', 'A'): 0.0233,
+        ('C', 'A', 'B'): 0.0233,
+        ('C', 'B', 'A'): 0.0233
+    }
+]
 
-ev_rps = [{('S', 'V', 'E'): 0.006954555165045033, ('E', 'V', 'S'): 0.025813146220725232, ('E', 'V'): 0.21158161078461896, ('V', 'E'): 0.12630526307958156, ('E', 'S', 'V'): 0.018255297906819686, ('V', 'E', 'S'): 0.018497732862412533, ('S', 'E', 'V'): 0.011649997381214387, ('E',): 0.5731331342160642, ('V', 'S', 'E'): 0.007809262383518508}, {('S', 'V', 'E'): 0.012854692513762032, ('E', 'S', 'V'): 0.021139232112424976, ('V', 'E'): 0.1440308601589531, ('V', 'E', 'S'): 0.028299447822906273, ('E', 'V'): 0.17645358835615865, ('E',): 0.5541393697255563, ('S', 'E', 'V'): 0.015748407103624188, ('V', 'S', 'E'): 0.015191930076137743, ('E', 'V', 'S'): 0.03214247213047656}, {('E', 'V', 'S'): 2.162089895557878e-114, ('E', 'S', 'V'): 8.69849694732277e-116, ('S', 'E', 'V'): 5.408959847014939e-116, ('E', 'V'): 0.07626595079639409, ('V',): 0.810388772553717, ('V', 'E'): 0.11334527664988885, ('V', 'S', 'E'): 1.8858155485975245e-115, ('S', 'V', 'E'): 8.038712477141707e-116, ('V', 'E', 'S'): 3.153958728468296e-114}, {('V', 'S', 'E'): 4.380326273109402e-46, ('E', 'V'): 0.08573845743356745, ('V', 'E'): 0.08236412407318644, ('V', 'E', 'S'): 1.2558151371858575e-45, ('V',): 0.831897418493246, ('S', 'V', 'E'): 3.0133973711356856e-46, ('S', 'E', 'V'): 3.1368516953566586e-46, ('E', 'S', 'V'): 4.6968282252751586e-46, ('E', 'V', 'S'): 1.2935593182643496e-45}]# 运行算法
-ev_rps2 = [{('S',): 0.8597874519936183, ('V', 'S', 'E'): 0.004826656846152488, ('E', 'V', 'S'): 0.00232304354480607, ('E', 'S', 'V'): 0.009386821806016948, ('E', 'S'): 0.02787470476262233, ('S', 'E'): 0.06602657421343949, ('S', 'V', 'E'): 0.010250597315175868, ('S', 'E', 'V'): 0.01748646035770921, ('V', 'E', 'S'): 0.002037689160459349}, {('V', 'E'): 0.1657907051681264, ('V', 'S', 'E'): 0.030296772131616363, ('S', 'E', 'V'): 0.020686104084820585, ('S', 'V', 'E'): 0.025342744539935916, ('V', 'E', 'S'): 0.035176977695437046, ('E', 'V', 'S'): 0.03138155796666076, ('E', 'V'): 0.1353272443716286, ('E', 'S', 'V'): 0.02206161988693075, ('V',): 0.5339362741548436}, {('E', 'S', 'V'): 4.422459965473793e-17, ('S',): 0.9999999999439214, ('S', 'E', 'V'): 5.922085196355288e-16, ('E', 'V', 'S'): 7.114282447383555e-19, ('V', 'E', 'S'): 6.820892889872117e-19, ('S', 'V', 'E'): 1.5933039689132633e-16, ('V', 'S', 'E'): 1.1407698214153826e-17, ('S', 'E'): 5.291409850222717e-11, ('E', 'S'): 3.163840693120981e-12}, {('E', 'V', 'S'): 1.7593224080148952e-15, ('S',): 0.9999999945065885, ('S', 'V', 'E'): 8.677908717381138e-15, ('V', 'S', 'E'): 3.755678798402833e-15, ('V', 'S'): 9.328831146080873e-10, ('S', 'V'): 4.56048691226305e-09, ('V', 'E', 'S'): 1.5111628146043908e-15, ('E', 'S', 'V'): 8.600613185686967e-15, ('S', 'E', 'V'): 1.706954224293838e-14}]
-results = process_example(evidence_rps)
-rps_list_r = [copy.deepcopy(results) for _ in range(len(evidence_rps))]
+APP = [{('A',): 0.9995900419317356, ('A', 'B'): 0.40774757175979454, ('B',): 0.0004099580682644938}, {('A',): 0.5971853753427087, ('A', 'B'): 0.3393351986359887, ('B',): 0.40281462465729134}, {('A',): 0.9997950023050056, ('A', 'B'): 0.4098747030083355, ('B',): 0.0002049976949943664}, {('A',): 0.9999982298336008, ('A', 'B'): 0.40412826322968365, ('B',): 1.7701663992529018e-06}, {('A',): 0.6920612262248713, ('A', 'B'): 0.3424497300095851, ('B',): 0.3079387737751286}, {('A',): 0.8963005932616178, ('A', 'B'): 0.38622581342131784, ('B',): 0.10369940673838214}, {('A',): 0.9906736422033019, ('A', 'B'): 0.4022039137389094, ('B',): 0.009326357796698066}, {('A',): 0.999999998041602, ('A', 'B'): 0.41673214061608416, ('B',): 1.9583979895726484e-09}, {('A',): 0.6623748005135889, ('A', 'B'): 0.3363555782543691, ('B',): 0.3376251994864111}, {('A',): 0.4834634400801462, ('B',): 0.5165365599198538, ('B', 'A'): 0.24629880744490706}, {('A',): 0.9993326416690039, ('A', 'B'): 0.3767939739381413, ('B',): 0.0006673583309960059}, {('A',): 0.5202197354048541, ('A', 'B'): 0.25083448914158174, ('B',): 0.47978026459514594}, {('A',): 0.986663734205784, ('A', 'B'): 0.37468475072917673, ('B',): 0.013336265794215912}, {('A',): 0.9999999999999492, ('A', 'B'): 0.37230904174591584, ('B',): 5.088926275296195e-14}, {('A',): 0.5109322270220101, ('A', 'B'): 0.2650183851417403, ('B',): 0.4890677729779898}, {('A',): 0.590066617983992, ('A', 'B'): 0.3143265816965441, ('B',): 0.40993338201600804}, {('A',): 0.6290144857774191, ('A', 'B'): 0.27829881598379547, ('B',): 0.37098551422258086}, {('A',): 0.7600103061440523, ('A', 'B'): 0.34358718040661934, ('B',): 0.23998969385594776}, {('A',): 0.4186131782013987, ('B',): 0.5813868217986012, ('B', 'A'): 0.24877825565655684}, {('A',): 0.6152443698793529, ('A', 'B'): 0.2607879736452785, ('B',): 0.38475563012064706}, {('A',): 0.9999913309581715, ('A', 'B'): 0.41505442520567226, ('B',): 8.669041828507591e-06}, {('A',): 0.4660775639937172, ('B',): 0.5339224360062828, ('B', 'A'): 0.2811698191816898}, {('A',): 0.9999665697451503, ('A', 'B'): 0.41628353003043217, ('B',): 3.3430254849671534e-05}, {('A',): 0.9999999996839196, ('A', 'B'): 0.40849288719829213, ('B',): 3.1608031701430925e-10}, {('A',): 0.6056987826268303, ('A', 'B'): 0.3541499497695474, ('B',): 0.3943012173731696}, {('A',): 0.9357954945055119, ('A', 'B'): 0.3859218603928547, ('B',): 0.06420450549448804}, {('A',): 0.834782992273792, ('A', 'B'): 0.39584200903561007, ('B',): 0.16521700772620798}, {('A',): 0.9999567286046183, ('A', 'B'): 0.41826767284730804, ('B',): 4.3271395381658525e-05}, {('A',): 0.8638709618531356, ('A', 'B'): 0.35663192720763737, ('B',): 0.1361290381468644}, {('A',): 0.4452749522183817, ('B',): 0.5547250477816184, ('B', 'A'): 0.21892837117098254}]
+
+results = process_example(APP)
+rps_list_r = [copy.deepcopy(results) for _ in range(len(APP))]
 orthogonal_sum = continuous_right_orthogonal_sum(rps_list_r)
 print(orthogonal_sum)

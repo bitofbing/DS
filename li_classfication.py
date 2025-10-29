@@ -5,191 +5,256 @@ from collections.abc import Iterable
 import numpy as np
 from collections import defaultdict
 from sklearn.model_selection import RepeatedKFold
-from sklearn.datasets import load_iris, load_wine
+from sklearn.datasets import load_iris, load_wine, load_breast_cancer, load_digits
+from typing import Dict, List, Tuple, Any
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import norm
+import pickle
+import os
+from ucimlrepo import fetch_ucirepo
+import pandas as pd
 
-def get_permutations_from_dict(rps_dict):
-    """从RPS字典中获取所有排列"""
-    return list(rps_dict.keys())
+import itertools
+import math
+import numpy as np
+from collections import defaultdict
+from functools import lru_cache
+# ==============================================================
+# 🔹 工具函数
+# ==============================================================
 
 def get_all_elements_from_dict(rps_dict):
-    """从RPS字典中获取所有元素"""
-    all_elements = set()
+    """从单个RPS字典中提取所有唯一元素"""
+    elements = set()
     for perm in rps_dict.keys():
-        all_elements.update(perm)
-    return sorted(all_elements)
+        elements.update(perm)
+    return tuple(sorted(elements))
 
-def ordered_degree(A_dict, B_dict):
-    """计算两个排列事件的有序度 (Definition 2.7) - 修改为直接使用字典"""
-    # 获取交集元素
-    intersection_elements = set()
-    intersection_elements.update(get_all_elements_from_dict(A_dict))
-    intersection_elements.update(get_all_elements_from_dict(B_dict))
 
-    total_rank_diff = 0
-    union_count = 0
+def flatten_rps_input(rps_input):
+    """确保输入为 [dict, dict, ...] 格式"""
+    if isinstance(rps_input, dict):
+        return [rps_input]
+    elif isinstance(rps_input, list) and all(isinstance(d, dict) for d in rps_input):
+        return rps_input
+    else:
+        raise TypeError("输入必须是字典或字典列表，例如 example5_4。")
 
-    for element in intersection_elements:
-        # 找到包含该元素的排列
-        rank_A = None
-        rank_B = None
 
-        for perm_A, mass_A in A_dict.items():
-            if mass_A > 0 and element in perm_A:
-                rank_A = perm_A.index(element) + 1
-                break
+# ==============================================================
+# 🔹 有序度计算（带缓存）
+# ==============================================================
 
-        for perm_B, mass_B in B_dict.items():
-            if mass_B > 0 and element in perm_B:
-                rank_B = perm_B.index(element) + 1
-                break
+@lru_cache(maxsize=None)
+def ordered_degree_cached(perm_i, perm_j):
+    """Definition 2.7：有序度计算（带缓存）"""
+    inter = set(perm_i) & set(perm_j)
+    if not inter:
+        return 0.0
+    diffs = [abs(perm_i.index(e) - perm_j.index(e)) for e in inter]
+    return math.exp(-np.mean(diffs))
 
-        if rank_A is not None and rank_B is not None:
-            total_rank_diff += abs(rank_A - rank_B)
-            union_count += 1
 
-    if union_count == 0:
-        return 0
+# ==============================================================
+# 🔹 RPS距离计算（带缓存）
+# ==============================================================
 
-    pseudo_deviation = total_rank_diff / union_count
-    return math.exp(-pseudo_deviation)
-
-def rps_distance(rps1_dict, rps2_dict):
-    """计算两个RPS之间的距离 (Definition 2.8) - 修改为直接使用字典"""
-    # 创建向量表示
-    all_perms = set(rps1_dict.keys()) | set(rps2_dict.keys())
-    all_perms = sorted(all_perms, key=lambda x: (len(x), x))
-
-    vec1 = np.array([rps1_dict.get(perm, 0) for perm in all_perms])
-    vec2 = np.array([rps2_dict.get(perm, 0) for perm in all_perms])
-
-    # 构建RD矩阵
+def rps_distance(rps1_dict, rps2_dict, cache=None):
+    """Definition 2.8：RPS 距离计算"""
+    all_perms = sorted(set(rps1_dict.keys()) | set(rps2_dict.keys()), key=lambda x: (len(x), x))
+    vec1 = np.array([rps1_dict.get(p, 0.0) for p in all_perms])
+    vec2 = np.array([rps2_dict.get(p, 0.0) for p in all_perms])
     n = len(all_perms)
-    RD = np.zeros((n, n))
 
-    for i in range(n):
-        for j in range(n):
-            if i <= j:  # 利用对称性
-                perm_i = all_perms[i]
-                perm_j = all_perms[j]
+    # 复用 RD 矩阵缓存
+    key = tuple(all_perms)
+    if cache is not None and key in cache:
+        RD = cache[key]
+    else:
+        RD = np.zeros((n, n))
+        for i in range(n):
+            set_i = set(all_perms[i])
+            for j in range(i, n):
+                set_j = set(all_perms[j])
+                inter = len(set_i & set_j)
+                union = len(set_i | set_j)
+                if union == 0:
+                    val = 0
+                else:
+                    val = (inter / union) * ordered_degree_cached(all_perms[i], all_perms[j])
+                RD[i, j] = RD[j, i] = val
+        if cache is not None:
+            cache[key] = RD
 
-                # 计算RD(A,B)
-                intersection_size = len(set(perm_i) & set(perm_j))
-                union_size = len(set(perm_i) | set(perm_j))
-
-                # 直接使用字典计算有序度
-                temp_dict1 = {perm_i: 1.0}
-                temp_dict2 = {perm_j: 1.0}
-                od_value = ordered_degree(temp_dict1, temp_dict2)
-
-                RD[i, j] = (intersection_size / union_size) * od_value
-                RD[j, i] = RD[i, j]  # 对称矩阵
-
-    # 计算距离
     diff = vec1 - vec2
-    try:
-        distance = np.sqrt(0.5 * diff @ RD @ diff.T)
-        return distance
-    except:
-        # 如果计算失败，返回一个较大的距离
-        return 1.0
+    return math.sqrt(0.5 * diff @ RD @ diff.T)
 
-def similarity_matrix(rps_dict_list):
-    """构建RPS相似度矩阵 (Definition 4.1) - 修改为使用字典列表"""
-    n = len(rps_dict_list)
-    sim_matrix = np.zeros((n, n))
+
+# ==============================================================
+# 🔹 相似度矩阵
+# ==============================================================
+
+def similarity_matrix(rps_input):
+    """Definition 4.1：构建RPS相似度矩阵"""
+    rps_list = flatten_rps_input(rps_input)
+    n = len(rps_list)
+    sim = np.eye(n)
+    cache = {}
 
     for i in range(n):
-        for j in range(n):
-            if i == j:
-                sim_matrix[i, j] = 1.0
-            else:
-                distance = rps_distance(rps_dict_list[i], rps_dict_list[j])
-                sim_matrix[i, j] = 1 - distance
+        for j in range(i + 1, n):
+            d = rps_distance(rps_list[i], rps_list[j], cache)
+            sim[i, j] = sim[j, i] = max(0, 1 - d)
+    return sim
 
-    return sim_matrix
+
+# ==============================================================
+# 🔹 支持度 & 可信度
+# ==============================================================
 
 def support_degree(sim_matrix):
-    """计算每个RPS的支持度 (Definition 4.2)"""
-    n = len(sim_matrix)
-    support = np.zeros(n)
+    """Definition 4.2：支持度"""
+    return np.sum(sim_matrix, axis=1) - 1
 
-    for i in range(n):
-        support[i] = np.sum(sim_matrix[i]) - 1  # 减去自身相似度
-
-    return support
 
 def credibility_degree(support):
-    """计算每个RPS的可信度 (Definition 4.3)"""
-    total_support = np.sum(support)
-    if total_support == 0:
-        return np.ones(len(support)) / len(support)
-    return support / total_support
+    """Definition 4.3：可信度"""
+    total = np.sum(support)
+    return np.ones_like(support) / len(support) if total == 0 else support / total
 
+
+# ==============================================================
+# 🔹 熵计算（Definition 2.9）
+# ==============================================================
+
+@lru_cache(maxsize=None)
 def F_function(i):
-    """计算F(i)函数 (Formula 17)"""
-    if i <= 0:
-        return 0
-    result = 0
-    for k in range(i + 1):
-        if i - k >= 0:
-            result += math.factorial(i) / math.factorial(i - k)
-    return result
+    """计算 F(i) (Formula 17)"""
+    return sum(math.factorial(i) / math.factorial(i - k) for k in range(i + 1))
+
 
 def rps_entropy(rps_dict):
-    """计算RPS的熵 (Definition 2.9) - 修改为使用字典"""
-    entropy = 0
-    all_perms = list(rps_dict.keys())
-
+    """计算RPS熵"""
+    entropy = 0.0
     for perm, mass in rps_dict.items():
         if mass > 0:
-            i = len(perm)  # 排列长度
-            F_i = F_function(i)
-            if F_i > 1 and mass > 0:
-                term = mass * math.log(mass / (F_i - 1))
-                entropy -= term
-
+            Fi = F_function(len(perm))
+            if Fi > 1:
+                entropy -= mass * math.log(mass / (Fi - 1))
     return entropy
 
-def weighted_subset_rps(rps_dict_list, credibilities, n_min=2):
-    """计算加权子集RPS (Definition 4.4) - 修改为使用字典列表"""
-    all_perms = set()
-    for rps_dict in rps_dict_list:
-        all_perms.update(rps_dict.keys())
-    all_perms = sorted(all_perms, key=lambda x: (len(x), x))
 
-    # 生成所有可能的子集组合（大小≥n_min）
+# ==============================================================
+# 🔹 加权子集融合（Definition 4.4）
+# ==============================================================
+from collections import defaultdict
+import itertools
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import math
+
+
+def weighted_subset_rps(rps_dict_list, credibilities, n_min=2, max_workers=None, chunk_size=1000):
+    """计算加权子集RPS (内存优化+并行版本)
+
+    参数:
+        max_workers: 并行进程数 (None=自动)
+        chunk_size: 每个进程处理的任务块大小
+    """
+    # 预计算全局数据
+    all_perms = sorted(set().union(*[r.keys() for r in rps_dict_list]),
+                       key=lambda x: (len(x), x))
     n_rps = len(rps_dict_list)
-    weighted_rps_results = {}
 
-    for subset_size in range(n_min, n_rps + 1):
-        for subset_indices in itertools.combinations(range(n_rps), subset_size):
-            # 计算加权质量函数
+    # 生成所有子集索引（惰性生成器）
+    def generate_combinations():
+        for subset_size in range(n_min, n_rps + 1):
+            for subset_indices in itertools.combinations(range(n_rps), subset_size):
+                yield subset_size, subset_indices
+
+    # 处理单个子集的函数
+    def process_chunk(chunk):
+        local_results = {}
+        for subset_size, subset_indices in chunk:
             weighted_mass = defaultdict(float)
-            total_cred = 0
+            total_cred = sum(credibilities[idx] for idx in subset_indices)
 
-            for idx in subset_indices:
-                cred = credibilities[idx]
-                total_cred += cred
-                for perm, mass in rps_dict_list[idx].items():
-                    weighted_mass[perm] += cred * mass
-
-            # 归一化
             if total_cred > 0:
-                for perm in weighted_mass:
-                    weighted_mass[perm] /= total_cred
+                for idx in subset_indices:
+                    cred = credibilities[idx]
+                    for perm, mass in rps_dict_list[idx].items():
+                        weighted_mass[perm] += cred * mass / total_cred
 
-            # 转换为标准格式
-            result_dict = {}
-            for perm in all_perms:
-                result_dict[perm] = weighted_mass.get(perm, 0.0)
+            result_dict = {perm: weighted_mass.get(perm, 0.0) for perm in all_perms}
+            local_results[f"WS{subset_size}_{len(local_results) + 1}"] = result_dict
+        return local_results
 
-            subset_key = f"WS{subset_size}_{len(weighted_rps_results) + 1}"
-            weighted_rps_results[subset_key] = result_dict
+    # 并行处理
+    weighted_rps_results = {}
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # 将任务分块处理
+        futures = []
+        current_chunk = []
+
+        for task in generate_combinations():
+            current_chunk.append(task)
+            if len(current_chunk) >= chunk_size:
+                futures.append(executor.submit(process_chunk, current_chunk))
+                current_chunk = []
+
+        if current_chunk:  # 处理剩余任务
+            futures.append(executor.submit(process_chunk, current_chunk))
+
+        # 合并结果
+        for future in as_completed(futures):
+            weighted_rps_results.update(future.result())
 
     return weighted_rps_results
 
+def weighted_subset_rps_optimized(rps_dict_list, credibilities, n_min=2, subset_size=None):
+    """优化版本：根据Definition 4.4计算加权子集RPS
+
+    参数:
+        subset_size: 指定子集大小（None=使用n_min，避免组合爆炸）
+    """
+    # 预计算所有排列
+    all_perms = sorted(set().union(*[r.keys() for r in rps_dict_list]),
+                       key=lambda x: (len(x), x))
+
+    n_rps = len(rps_dict_list)
+    weighted_rps_results = {}
+
+    # 关键优化：只计算特定大小的子集，避免组合爆炸
+    if subset_size is None:
+        subset_size = n_min  # 默认使用最小子集大小
+
+    # 只计算指定大小的子集（而不是所有大小）
+    valid_sizes = [subset_size] if subset_size >= n_min else [n_min]
+
+    counter = 1
+    for size in valid_sizes:
+        # 限制最大子集数量，防止组合爆炸
+        max_combinations = min(100, math.comb(n_rps, size))  # 安全限制
+
+        for i, subset_indices in enumerate(itertools.combinations(range(n_rps), size)):
+            if i >= max_combinations:  # 防止组合爆炸
+                break
+
+            # 计算加权质量函数
+            weighted_mass = defaultdict(float)
+            total_cred = sum(credibilities[idx] for idx in subset_indices)
+
+            if total_cred > 0:
+                for idx in subset_indices:
+                    cred = credibilities[idx]
+                    for perm, mass in rps_dict_list[idx].items():
+                        weighted_mass[perm] += cred * mass / total_cred
+
+            # 转换为标准格式
+            result_dict = {perm: weighted_mass.get(perm, 0.0) for perm in all_perms}
+            weighted_rps_results[f"WS{size}_{counter}"] = result_dict
+            counter += 1
+
+    return weighted_rps_results
 def process_example(example_data):
     """处理示例数据 - 修改为使用字典列表"""
     # 步骤1: 构建相似度矩阵
@@ -213,7 +278,7 @@ def process_example(example_data):
     # print()
 
     # 步骤4: 计算加权子集RPS
-    weighted_rps = weighted_subset_rps(example_data, credibility, n_min=2)
+    weighted_rps = weighted_subset_rps_optimized(example_data, credibility, n_min=2)
     # print("加权子集RPS数量:", len(weighted_rps))
     # print()
 
@@ -527,7 +592,31 @@ def convert_numpy_types(obj):
 
 # 原有的所有类定义和函数保持不变...
 # [这里包含您提供的所有类定义和函数，从RandomPermutationSet到final_classification]
-
+# 定义映射关系
+# index_to_label = {0: 'S', 1: 'E', 2: 'V'}
+index_to_label= {
+0: "A",
+1: "B",
+2: "C",
+3: "D",
+4: "E",
+5: "F",
+6: "G",
+7: "H",
+8: "I",
+9: "J"
+}
+# 转换函数
+def convert_to_labeled_rps(gen_rps):
+    labeled_evidence = []
+    for rps in gen_rps:
+        converted = {}
+        for items, mass in rps:
+            # 转换数字索引为字母标签
+            labeled_items = tuple(index_to_label[i] for i in items)
+            converted[labeled_items] = mass
+        labeled_evidence.append(converted)
+    return labeled_evidence
 # ==================== 新增的交叉验证框架 ====================
 
 def cross_validation_with_rps(n_splits=5, n_repeats=100):
@@ -621,62 +710,330 @@ def cross_validation_with_rps(n_splits=5, n_repeats=100):
     # 计算最终统计结果
     return calculate_final_statistics(all_accuracies, n_splits, n_repeats)
 
-# 定义映射关系
-index_to_label = {0: 'S', 1: 'E', 2: 'V'}
+# def calculate_final_statistics(all_accuracies, n_splits, n_repeats):
+#     """计算最终统计结果"""
+#     # 计算每次5折交叉验证的平均值
+#     repeat_means = []
+#     for i in range(n_repeats):
+#         start_idx = i * n_splits
+#         end_idx = start_idx + n_splits
+#         repeat_mean = np.mean(all_accuracies[start_idx:end_idx])
+#         repeat_means.append(repeat_mean)
+#
+#     # 输出最终结果
+#     print("=" * 60)
+#     print(f"{n_repeats}次{n_splits}折交叉验证最终结果:")
+#     print(f"总折次数: {len(all_accuracies)}")
+#     print(f"总体平均准确率: {np.mean(all_accuracies):.4f} (±{np.std(all_accuracies):.4f})")
+#     print(f"每次{n_splits}折交叉验证的平均准确率: {np.mean(repeat_means):.4f} (±{np.std(repeat_means):.4f})")
+#     print(f"最高准确率: {np.max(all_accuracies):.4f}")
+#     print(f"最低准确率: {np.min(all_accuracies):.4f}")
+#
+#     return {
+#         'all_accuracies': all_accuracies,
+#         'repeat_means': repeat_means,
+#         'overall_mean': np.mean(all_accuracies),
+#         'overall_std': np.std(all_accuracies),
+#         'repeat_mean': np.mean(repeat_means),
+#         'repeat_std': np.std(repeat_means)
+#     }
+def load_sonar_dataset():
+    """加载Sonar数据集"""
+    sonar = fetch_ucirepo(id=151)
+    X = sonar.data.features
+    y = sonar.data.targets
 
-# 转换函数
-def convert_to_labeled_rps(gen_rps):
-    labeled_evidence = []
-    for rps in gen_rps:
-        converted = {}
-        for items, mass in rps:
-            # 转换数字索引为字母标签
-            labeled_items = tuple(index_to_label[i] for i in items)
-            converted[labeled_items] = mass
-        labeled_evidence.append(converted)
-    return labeled_evidence
+    # 将目标变量转换为数值：Rock=0, Mine=1
+    y = (y == 'M').astype(int).values.ravel()
 
+    return {'data': X.values, 'target': y}
+def generalized_cross_validation_with_rps(
+        dataset_name: str = 'iris',
+        n_splits: int = 5,
+        n_repeats: int = 100,
+        results_dir: str = 'cv_results\li_classfication',
+        save_final: bool = True
+) -> Dict[str, Any]:
+    """
+    通用的五折交叉验证函数，支持多种数据集
 
-def calculate_final_statistics(all_accuracies, n_splits, n_repeats):
-    """计算最终统计结果"""
-    # 计算每次5折交叉验证的平均值
-    repeat_means = []
-    for i in range(n_repeats):
-        start_idx = i * n_splits
-        end_idx = start_idx + n_splits
-        repeat_mean = np.mean(all_accuracies[start_idx:end_idx])
-        repeat_means.append(repeat_mean)
+    参数:
+        dataset_name: 数据集名称 ('iris', 'wine', 'breast_cancer', 'digits', 'heart')
+        n_splits: 折数 (默认为5)
+        n_repeats: 重复次数 (默认为100)
+        results_dir: 结果保存目录
+        save_final: 是否保存最终结果
 
-    # 输出最终结果
-    print("=" * 60)
-    print(f"{n_repeats}次{n_splits}折交叉验证最终结果:")
-    print(f"总折次数: {len(all_accuracies)}")
-    print(f"总体平均准确率: {np.mean(all_accuracies):.4f} (±{np.std(all_accuracies):.4f})")
-    print(f"每次{n_splits}折交叉验证的平均准确率: {np.mean(repeat_means):.4f} (±{np.std(repeat_means):.4f})")
-    print(f"最高准确率: {np.max(all_accuracies):.4f}")
-    print(f"最低准确率: {np.min(all_accuracies):.4f}")
-
-    return {
-        'all_accuracies': all_accuracies,
-        'repeat_means': repeat_means,
-        'overall_mean': np.mean(all_accuracies),
-        'overall_std': np.std(all_accuracies),
-        'repeat_mean': np.mean(repeat_means),
-        'repeat_std': np.std(repeat_means)
+    返回:
+        包含完整结果的字典
+    """
+    # 1. 加载数据集
+    global elements
+    global class_mapping
+    data_loader = {
+        'iris': load_iris,
+        'wine': load_wine,
+        'breast_cancer': load_breast_cancer,
+        'digits': load_digits,
+        'heart': load_heart_dataset,
+        'sonar': load_sonar_dataset  # 新增Sonar数据集
     }
 
+    if dataset_name not in data_loader:
+        raise ValueError(f"不支持的数据集: {dataset_name}. 可选: {list(data_loader.keys())}")
+
+    dataset = data_loader[dataset_name]()
+    X = dataset['data']
+    y = dataset['target']
+
+    # 2. 根据数据集设置类别标签
+    # 2. 根据数据集设置类别标签和映射关系
+    if dataset_name == 'iris':
+        # 3类: A, B, C
+        class_labels = ['setosa', 'versicolor', 'virginica']
+        elements = ['A', 'B', 'C']
+        class_mapping = {'A': 0, 'B': 1, 'C': 2}
+        original_to_letter = {0: 'A', 1: 'B', 2: 'C'}
+    elif dataset_name == 'wine':
+        # 3类: A, B, C
+        class_labels = ['Class_1', 'Class_2', 'Class_3']
+        elements = ['A', 'B', 'C']
+        class_mapping = {'A': 0, 'B': 1, 'C': 2}
+        original_to_letter = {0: 'A', 1: 'B', 2: 'C'}
+    elif dataset_name == 'breast_cancer':
+        # 2类: A, B
+        class_labels = ['Benign', 'Malignant']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+        original_to_letter = {0: 'A', 1: 'B'}
+    elif dataset_name == 'digits':
+        # 10类: A-J
+        class_labels = [str(i) for i in range(10)]
+        elements = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+        class_mapping = {letter: i for i, letter in enumerate(elements)}
+        original_to_letter = {i: letter for i, letter in enumerate(elements)}
+    elif dataset_name == 'heart':
+        # 2类: A, B
+        class_labels = ['No_Disease', 'Disease']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+        original_to_letter = {0: 'A', 1: 'B'}
+    elif dataset_name == 'sonar':
+        # 2类: A, B
+        class_labels = ['Rock', 'Mine']
+        elements = ['A', 'B']
+        class_mapping = {'A': 0, 'B': 1}
+
+    # 3. 创建结果目录
+    os.makedirs(results_dir, exist_ok=True)
+
+    # 4. 初始化交叉验证
+    rkf = RepeatedKFold(n_splits=n_splits, n_repeats=n_repeats, random_state=42)
+
+    file_results = {
+        'dataset': dataset_name,
+        'mean_accuracy': 0.0,  # 存储每次重复的统计摘要
+        'std_accuracy': 0.0
+    }
+    # 5. 存储所有结果
+    all_results = {
+        'dataset': dataset_name,
+        'n_splits': n_splits,
+        'n_repeats': n_repeats,
+        'class_labels': class_labels,
+        'class_mapping': class_mapping,
+        'fold_results': [],  # 存储每一折的详细结果
+        'repeat_summaries': [],  # 存储每次重复的统计摘要
+        'all_accuracies': []  # 存储所有准确率
+    }
+
+    repeat_count = 1
+    current_repeat_results = []
+
+    for train_index, test_index in rkf.split(X):
+        fold_result = {
+            'repeat': (repeat_count - 1) // n_splits + 1,
+            'fold': ((repeat_count - 1) % n_splits) + 1,
+            'train_indices': train_index.tolist(),
+            'test_indices': test_index.tolist(),
+            'sample_results': [],
+            'accuracy': 0.0
+        }
+
+        # 划分训练测试集
+        X_train, X_test = X[train_index], X[test_index]
+        y_train, y_test = y[train_index], y[test_index]
+
+        # 数据标准化
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+
+        correct_predictions = 0
+        total_predictions = 0
+
+        for test_idx in range(len(X_test_scaled)):
+            # sample_result = {
+            #     'true_label': int(y_test[test_idx]),
+            #     'predicted_label': None,
+            #     'prob_dist': None,
+            #     'evidence': None,
+            #     'correct': False
+            # }
+
+            try:
+                # 1. 生成测试样本的RPS
+                gen_rps = gen_rps_fun_for_sample(X_train_scaled, y_train, X_test_scaled[test_idx])
+
+                # 2. 将RPS转换为标准格式
+                convert_numpy_types(gen_rps)
+                labeled_evidence = convert_to_labeled_rps(gen_rps)
+
+                # 3. 处理RPS证据（您的核心算法）
+                rps_me = process_example(labeled_evidence)
+
+                # 4. 创建标准RPS列表（基于训练集）
+                # rps_std_list = create_standard_rps_from_training(X_train_scaled, y_train)
+                rps_list_r = [copy.deepcopy(rps_me) for _ in range(len(gen_rps))]
+                orthogonal_sum = continuous_right_orthogonal_sum(rps_list_r)
+
+                # 5. 执行最终分类
+                classification_result = final_classification(
+                    orthogonal_sum,
+                    rps_list_r
+                )
+
+                # 6. 检查分类是否正确
+                true_label = y_test[test_idx]
+                # predicted_label = classification_result['min_index']  # 假设min_index对应类别
+                predicted_label = classification_result
+                true_label_str  = index_to_label[true_label]
+                if predicted_label[0] == true_label_str:
+                    correct_predictions += 1
+                total_predictions += 1
+
+            except Exception as e:
+                print(f"处理样本 {test_idx} 时出错: {e}")
+                # sample_result['error'] = str(e)
+
+            # fold_result['sample_results'].append(sample_result)
+
+        # 计算当前折的准确率
+        if total_predictions > 0:
+            acc = correct_predictions / total_predictions
+            fold_result['accuracy'] = acc
+            all_results['all_accuracies'].append(acc)
+        else:
+            fold_result['accuracy'] = 0.0
+            all_results['all_accuracies'].append(0.0)
+
+        current_repeat_results.append(fold_result)
+        all_results['fold_results'].append(fold_result)
+
+        print(f"Repeat {(repeat_count - 1) // n_splits + 1}, Fold {((repeat_count - 1) % n_splits) + 1}: "
+              f"Accuracy = {fold_result['accuracy']:.4f}")
+
+        # 每完成一次完整的5折交叉验证，生成统计摘要但不保存文件
+        if repeat_count % n_splits == 0:
+            current_repeat = repeat_count // n_splits
+            current_accuracies = [r['accuracy'] for r in current_repeat_results[-n_splits:]]
+            mean_acc = np.mean(current_accuracies)
+
+            repeat_summary = {
+                'repeat': current_repeat,
+                # 'fold_accuracies': current_accuracies,
+                'mean_accuracy': mean_acc,
+                # 'std_accuracy': np.std(current_accuracies),
+                # 'min_accuracy': min(current_accuracies),
+                # 'max_accuracy': max(current_accuracies)
+            }
+
+            # file_results['repeat_summaries'].append(repeat_summary)
+
+            print(f"\n=== Repeat {current_repeat} 完成 ===")
+            print(f"平均准确率: {mean_acc:.4f} ± {np.std(current_accuracies):.4f}")
+            print(f"各折准确率: {[f'{acc:.4f}' for acc in current_accuracies]}")
+            print(f"最小准确率: {min(current_accuracies):.4f}")
+            print(f"最大准确率: {max(current_accuracies):.4f}\n")
+
+            # 重置当前重复结果（仅清空临时列表）
+            current_repeat_results = []
+
+        repeat_count += 1
+
+    # 计算最终统计结果
+    final_stats = calculate_final_statistics(all_results['all_accuracies'], n_splits, n_repeats)
+    all_results.update(final_stats)
+    file_results['mean_accuracy'] = final_stats['mean_accuracy']
+    file_results['std_accuracy'] = final_stats['std_accuracy']
+
+    # 保存完整结果
+    if save_final:
+        final_path = os.path.join(results_dir, f"{dataset_name}_final_results.pkl")
+        with open(final_path, 'wb') as f:
+            pickle.dump(file_results, f)
+        print(f"\n完整结果已保存到: {final_path}")
+
+    return all_results
+
+
+def load_heart_dataset():
+    """
+    加载Heart疾病数据集
+    使用UCI机器学习仓库的API获取数据
+    """
+    heart_disease = fetch_ucirepo(id=45)
+    X = heart_disease.data.features
+    y = heart_disease.data.targets
+
+    # 处理目标变量：将>0的值视为有疾病(1)，0为无疾病(0)
+    y = (y > 0).astype(int).values.ravel()
+
+    # 处理缺失值（如果有）
+    if isinstance(X, pd.DataFrame):
+        X = X.fillna(X.mean()).values
+
+    return {'data': X, 'target': y}
+
+
+def calculate_final_statistics(all_accuracies: List[float], n_splits: int, n_repeats: int) -> Dict[str, Any]:
+    """计算最终的统计结果"""
+    accuracies = np.array(all_accuracies)
+    repeat_accuracies = accuracies.reshape(n_repeats, n_splits).mean(axis=1)
+
+    return {
+        'mean_accuracy': np.mean(accuracies),
+        'std_accuracy': np.std(accuracies),
+        'mean_repeat_accuracy': np.mean(repeat_accuracies),
+        'std_repeat_accuracy': np.std(repeat_accuracies),
+        'min_accuracy': np.min(accuracies),
+        'max_accuracy': np.max(accuracies),
+        'median_accuracy': np.median(accuracies),
+        'repeat_accuracies': repeat_accuracies.tolist(),
+        'all_accuracies': all_accuracies
+    }
 # ==================== 主程序 ====================
 
 if __name__ == "__main__":
     # 执行100次五折交叉验证
-    results = cross_validation_with_rps(n_splits=5, n_repeats=100)
-
+    # results = cross_validation_with_rps(n_splits=5, n_repeats=100)
+    # heart数据集最终结果:
+    # 平均准确率: 0.7613 ± 0.0495
+    # breast_cancer数据集最终结果:
+    # 平均准确率: 0.8928 ± 0.0271
+    # sonar数据集最终结果:
+    # 平均准确率: 0.5622 ± 0.0691
+    results = generalized_cross_validation_with_rps('sonar')
+    print("\nIris数据集最终结果:")
+    print(f"平均准确率: {results['mean_accuracy']:.4f} ± {results['std_accuracy']:.4f}")
     # 保存结果（可选）
-    print("\n交叉验证完成！")
-    print(f"最终平均准确率: {results['overall_mean']:.4f} ± {results['overall_std']:.4f}")
+    # databases = ['breast_cancer','digits','heart']
+    # for database in databases:
+    #     iris_results = generalized_cross_validation_with_rps(database)
+
 
     # # 执行处理流程
-    # results = process_example(ev_rps2)
+    # results = process_example(example5_4)
     # # 创建标准RPS列表 (这里使用原始ev_rps2作为标准RPS)
     # rps_std_list = [RandomPermutationSet(rps_data) for rps_data in ev_rps2]
     # rps_list_r = [copy.deepcopy(results) for _ in range(len(ev_rps2))]
